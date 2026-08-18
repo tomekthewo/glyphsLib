@@ -18,6 +18,7 @@ from glyphsLib import to_designspace, to_glyphs
 from glyphsLib.builder.stat import is_stat_only_ital
 from glyphsLib.classes import (
     GSAxis,
+    GSCustomParameter,
     GSFont,
     GSFontMaster,
     GSGlyph,
@@ -363,6 +364,26 @@ def test_elidable_stat_axis_value_name_param():
     ]
 
 
+def test_disabled_elidable_stat_axis_value_name_param_is_ignored():
+    font = _make_font(
+        [("wght", "Weight")],
+        [("Regular", [400]), ("Bold", [700])],
+        [
+            ("Regular", [400], {"weight": "Regular"}),
+            ("Bold", [700], {"weight": "Bold"}),
+        ],
+    )
+    font.instances[1].customParameters.append(
+        GSCustomParameter("Elidable STAT Axis Value Name", "wght", disabled=True)
+    )
+    doc = to_designspace(font)
+
+    assert _labels(_axis(doc, "wght")) == [
+        ("Regular", 400, True, None),
+        ("Bold", 700, False, None),
+    ]
+
+
 def test_elidable_default_still_links_to_the_style_linked_bold():
     font = _make_font(
         [("wght", "Weight")],
@@ -414,6 +435,26 @@ def test_style_name_as_stat_entry_manual_mode():
     assert not _axis(doc, "wdth").axisLabels
     # The STAT-only italic axis is still appended in manual mode.
     assert _labels(_axis(doc, "ital")) == [("Roman", 0, True, 1)]
+
+
+def test_disabled_style_name_as_stat_entry_param_is_ignored():
+    font = _make_font(
+        [("wght", "Weight")],
+        [("Regular", [400]), ("Bold", [700])],
+        [
+            ("Regular", [400], {"weight": "Regular"}),
+            ("Bold", [700], {"weight": "Bold"}),
+        ],
+    )
+    font.instances[1].customParameters.append(
+        GSCustomParameter("Style Name as STAT entry", "wght", disabled=True)
+    )
+    doc = to_designspace(font)
+
+    assert _labels(_axis(doc, "wght")) == [
+        ("Regular", 400, True, None),
+        ("Bold", 700, False, None),
+    ]
 
 
 def test_real_italic_axis_suppresses_stat_only_and_links_upright():

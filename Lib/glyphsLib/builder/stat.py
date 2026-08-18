@@ -46,7 +46,7 @@ def _is_elidable(instance, axis):
     return any(
         param.value == axis.tag
         for param in instance.customParameters
-        if param.name == "Elidable STAT Axis Value Name"
+        if param.name == "Elidable STAT Axis Value Name" and not param.disabled
     )
 
 
@@ -54,7 +54,7 @@ def _stat_entry_tags(instance):
     return [
         param.value
         for param in instance.customParameters
-        if param.name == "Style Name as STAT entry"
+        if param.name == "Style Name as STAT entry" and not param.disabled
     ]
 
 
