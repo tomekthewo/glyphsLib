@@ -23,128 +23,99 @@ from glyphsLib.builder.multi_language import expand_multi_language_statements
 
 GLYPH_NAMES = ["i", "idotaccent", "Scedilla", "Scommaaccent", "Lcommaaccent"]
 
+LANGUAGE_SYSTEMS = "languagesystem DFLT dflt;\nlanguagesystem latn dflt;\n" + "".join(
+    f"languagesystem latn {tag};\n"
+    for tag in ("AZE", "CRT", "KAZ", "TAT", "TRK", "ROM", "MOL")
+)
 
-def parse(fea, glyph_names=GLYPH_NAMES):
+
+def parse(fea):
     """Parse the feature text, raising on anything feaLib does not accept."""
-    header = "languagesystem DFLT dflt;\nlanguagesystem latn dflt;\n"
-    header += "".join(
-        f"languagesystem latn {tag};\n"
-        for tag in ("AZE", "CRT", "KAZ", "TAT", "TRK", "ROM", "MOL")
-    )
-    return Parser(io.StringIO(header + fea), glyphNames=glyph_names).parse()
+    feature_file = io.StringIO(LANGUAGE_SYSTEMS + fea)
+    return Parser(feature_file, glyphNames=GLYPH_NAMES).parse()
 
 
-def expand(fea):
-    return expand_multi_language_statements(dedent(fea))
-
-
-def stripped(fea):
-    return [line.strip() for line in fea.splitlines()]
-
-
-def test_named_lookup_is_defined_once_and_referenced():
-    fea = expand("""\
-        feature locl {
-        script latn;
-
-        language AZE CRT KAZ TAT TRK;
-        lookup idotaccent {
-            sub i by idotaccent;
-        } idotaccent;
-
-        } locl;
-        """)
-
-    lines = stripped(fea)
-    # Defined under the first tag only ...
-    assert lines.count("lookup idotaccent {") == 1
-    # ... and referenced under each of the remaining four.
-    assert lines.count("lookup idotaccent;") == 4
-    for tag in ("AZE", "CRT", "KAZ", "TAT", "TRK"):
-        assert f"language {tag};" in lines
+def check(source, expected):
+    """Expand the source, assert the whole output, then parse it."""
+    fea = expand_multi_language_statements(dedent(source))
+    assert fea == dedent(expected)
     parse(fea)
 
 
 def test_bare_rules_are_repeated():
-    fea = expand("""\
+    check(
+        """\
         feature locl {
         script latn;
         language ROM MOL;
         sub Scedilla by Scommaaccent;
         } locl;
-        """)
-
-    lines = stripped(fea)
-    assert lines.count("sub Scedilla by Scommaaccent;") == 2
-    assert lines.count("language ROM;") == 1
-    assert lines.count("language MOL;") == 1
-    parse(fea)
-
-
-def test_glyph_class_is_not_redefined():
-    fea = expand("""\
+        """,
+        """\
         feature locl {
-        language ROM MOL;
-        @Cedillas = [Scedilla];
-        sub @Cedillas by Scommaaccent;
+        script latn;
+        language ROM;
+        sub Scedilla by Scommaaccent;
+        language MOL;
+        sub Scedilla by Scommaaccent;
         } locl;
-        """)
-
-    lines = stripped(fea)
-    assert lines.count("@Cedillas = [Scedilla];") == 1
-    assert lines.count("sub @Cedillas by Scommaaccent;") == 2
-    parse(fea)
+        """,
+    )
 
 
-def test_multi_line_glyph_class_is_dropped_whole():
-    fea = expand("""\
+def test_named_lookup_is_defined_once_and_referenced():
+    check(
+        """\
         feature locl {
-        language ROM MOL;
-        @Ced = [Scedilla
-                Lcommaaccent];
-        sub @Ced by Scommaaccent;
+        script latn;
+        language AZE CRT KAZ;
+        lookup idotaccent {
+            sub i by idotaccent;
+        } idotaccent;
         } locl;
-        """)
-
-    lines = stripped(fea)
-    assert lines.count("Lcommaaccent];") == 1
-    assert lines.count("sub @Ced by Scommaaccent;") == 2
-    parse(fea)
-
-
-def test_mark_class_is_not_redefined():
-    fea = expand("""\
-        feature test {
-        language ROM MOL;
-        markClass [Scedilla] <anchor 0 0> @MC;
-        pos base i <anchor 0 0> mark @MC;
-        } test;
-        """)
-
-    lines = stripped(fea)
-    assert lines.count("markClass [Scedilla] <anchor 0 0> @MC;") == 1
-    assert lines.count("pos base i <anchor 0 0> mark @MC;") == 2
-    parse(fea)
+        """,
+        """\
+        feature locl {
+        script latn;
+        language AZE;
+        lookup idotaccent {
+            sub i by idotaccent;
+        } idotaccent;
+        language CRT;
+        lookup idotaccent;
+        language KAZ;
+        lookup idotaccent;
+        } locl;
+        """,
+    )
 
 
 def test_lookup_with_use_extension_is_referenced():
-    fea = expand("""\
+    check(
+        """\
         feature locl {
         language AZE CRT;
         lookup idot useExtension {
             sub i by idotaccent;
         } idot;
         } locl;
-        """)
-
-    lines = stripped(fea)
-    assert lines.count("lookup idot useExtension {") == 1
-    assert lines.count("lookup idot;") == 1
-    parse(fea)
+        """,
+        """\
+        feature locl {
+        language AZE;
+        lookup idot useExtension {
+            sub i by idotaccent;
+        } idot;
+        language CRT;
+        lookup idot;
+        } locl;
+        """,
+    )
 
 
 def test_lookup_with_brace_on_the_next_line_is_referenced():
-    fea = expand("""\
+    check(
+        """\
         feature locl {
         language AZE CRT;
         lookup idot
@@ -152,83 +123,195 @@ def test_lookup_with_brace_on_the_next_line_is_referenced():
             sub i by idotaccent;
         } idot;
         } locl;
-        """)
+        """,
+        """\
+        feature locl {
+        language AZE;
+        lookup idot
+        {
+            sub i by idotaccent;
+        } idot;
+        language CRT;
+        lookup idot;
+        } locl;
+        """,
+    )
 
-    lines = stripped(fea)
-    assert lines.count("lookup idot") == 1
-    assert lines.count("lookup idot;") == 1
-    parse(fea)
+
+def test_glyph_class_is_not_redefined():
+    check(
+        """\
+        feature locl {
+        language ROM MOL;
+        @Cedillas = [Scedilla];
+        sub @Cedillas by Scommaaccent;
+        } locl;
+        """,
+        """\
+        feature locl {
+        language ROM;
+        @Cedillas = [Scedilla];
+        sub @Cedillas by Scommaaccent;
+        language MOL;
+        sub @Cedillas by Scommaaccent;
+        } locl;
+        """,
+    )
 
 
-def test_brace_in_a_comment_does_not_truncate_the_body():
-    """A closing brace in a comment must not end the block early.
+def test_multi_line_glyph_class_is_dropped_whole():
+    check(
+        """\
+        feature locl {
+        language ROM MOL;
+        @Ced = [Scedilla
+                Lcommaaccent];
+        sub @Ced by Scommaaccent;
+        } locl;
+        """,
+        """\
+        feature locl {
+        language ROM;
+        @Ced = [Scedilla
+                Lcommaaccent];
+        sub @Ced by Scommaaccent;
+        language MOL;
+        sub @Ced by Scommaaccent;
+        } locl;
+        """,
+    )
 
-    That would bind the rules to the last tag only, and parse cleanly while
-    doing so.
-    """
-    fea = expand("""\
+
+def test_mark_class_is_not_redefined():
+    check(
+        """\
+        feature test {
+        language ROM MOL;
+        markClass [Scedilla] <anchor 0 0> @MC;
+        pos base i <anchor 0 0> mark @MC;
+        } test;
+        """,
+        """\
+        feature test {
+        language ROM;
+        markClass [Scedilla] <anchor 0 0> @MC;
+        pos base i <anchor 0 0> mark @MC;
+        language MOL;
+        pos base i <anchor 0 0> mark @MC;
+        } test;
+        """,
+    )
+
+
+def test_closing_brace_in_a_comment_does_not_truncate_the_body():
+    """It would otherwise bind the rules to the last tag only, and parse
+    cleanly while doing so."""
+    check(
+        """\
         feature locl {
         language AZE CRT;
         # see the } sign
         sub i by idotaccent;
         } locl;
-        """)
+        """,
+        """\
+        feature locl {
+        language AZE;
+        # see the } sign
+        sub i by idotaccent;
+        language CRT;
+        # see the } sign
+        sub i by idotaccent;
+        } locl;
+        """,
+    )
 
-    assert stripped(fea).count("sub i by idotaccent;") == 2
-    parse(fea)
 
-
-def test_brace_in_a_comment_does_not_swallow_the_closing_brace():
-    fea = expand("""\
+def test_opening_brace_in_a_comment_does_not_swallow_the_closing_brace():
+    check(
+        """\
         feature locl {
         language AZE CRT;
         # an opening { sign
         sub i by idotaccent;
         } locl;
-        """)
-
-    assert fea.rstrip().endswith("} locl;")
-    parse(fea)
+        """,
+        """\
+        feature locl {
+        language AZE;
+        # an opening { sign
+        sub i by idotaccent;
+        language CRT;
+        # an opening { sign
+        sub i by idotaccent;
+        } locl;
+        """,
+    )
 
 
 def test_trailing_comment_on_a_delimiter_ends_the_body():
-    fea = expand("""\
+    check(
+        """\
         feature locl {
         language AZE CRT;
         sub i by idotaccent;
         language TRK; # Turkish
         sub Scedilla by Scommaaccent;
         } locl;
-        """)
-
-    lines = stripped(fea)
-    # TRK keeps its own single rule and is not replayed under the shorthand.
-    assert lines.count("sub Scedilla by Scommaaccent;") == 1
-    assert lines.count("sub i by idotaccent;") == 2
-    assert lines.index("language TRK; # Turkish") > lines.index("language CRT;")
-    parse(fea)
+        """,
+        """\
+        feature locl {
+        language AZE;
+        sub i by idotaccent;
+        language CRT;
+        sub i by idotaccent;
+        language TRK; # Turkish
+        sub Scedilla by Scommaaccent;
+        } locl;
+        """,
+    )
 
 
 def test_trailing_comment_on_the_statement_is_kept():
-    fea = expand("""\
+    check(
+        """\
+        feature locl {
+        script latn;
         language AZE CRT; # Turkic
         sub i by idotaccent;
-        """)
-
-    lines = stripped(fea)
-    assert "language AZE; # Turkic" in lines
-    assert "language CRT;" in lines
+        } locl;
+        """,
+        """\
+        feature locl {
+        script latn;
+        language AZE; # Turkic
+        sub i by idotaccent;
+        language CRT;
+        sub i by idotaccent;
+        } locl;
+        """,
+    )
 
 
 def test_keywords_are_kept_on_every_tag():
-    fea = expand("""\
+    check(
+        """\
+        feature locl {
+        script latn;
         language ROM MOL exclude_dflt;
         sub Scedilla by Scommaaccent;
-        """)
-
-    lines = stripped(fea)
-    assert "language ROM exclude_dflt;" in lines
-    assert "language MOL exclude_dflt;" in lines
+        } locl;
+        """,
+        """\
+        feature locl {
+        script latn;
+        language ROM exclude_dflt;
+        sub Scedilla by Scommaaccent;
+        language MOL exclude_dflt;
+        sub Scedilla by Scommaaccent;
+        } locl;
+        """,
+    )
 
 
 def test_single_tag_is_untouched():
@@ -255,7 +338,7 @@ def make_font():
 
     prefix = classes.GSFeaturePrefix()
     prefix.name = "Languagesystems"
-    prefix.code = "languagesystem latn AZE;\nlanguagesystem latn TRK;\n"
+    prefix.code = "languagesystem latn AZE;\nlanguagesystem latn TRK;"
     font.featurePrefixes.append(prefix)
 
     feature = classes.GSFeature("locl")
@@ -264,8 +347,7 @@ def make_font():
         language AZE TRK;
         lookup idotaccent {
             sub i by idotaccent;
-        } idotaccent;
-        """)
+        } idotaccent;""")
     font.features.append(feature)
     return font
 
@@ -273,11 +355,21 @@ def make_font():
 def test_to_ufos_expands_feature_code(ufo_module):
     (ufo,) = to_ufos(make_font(), ufo_module=ufo_module)
 
-    lines = stripped(ufo.features.text)
-    assert "language AZE TRK;" not in lines
-    assert "language AZE;" in lines
-    assert "language TRK;" in lines
-    assert lines.count("lookup idotaccent;") == 1
+    assert ufo.features.text == dedent("""\
+        # Prefix: Languagesystems
+        languagesystem latn AZE;
+        languagesystem latn TRK;
+
+        feature locl {
+        script latn;
+        language AZE;
+        lookup idotaccent {
+            sub i by idotaccent;
+        } idotaccent;
+        language TRK;
+        lookup idotaccent;
+        } locl;
+        """)
     Parser(io.StringIO(ufo.features.text), glyphNames=GLYPH_NAMES).parse()
 
 
@@ -291,7 +383,11 @@ def test_expansion_does_not_round_trip(ufo_module):
     (ufo,) = to_ufos(make_font(), ufo_module=ufo_module)
 
     (feature,) = to_glyphs([ufo]).features
-    lines = stripped(feature.code)
-    assert "language AZE TRK;" not in lines
-    assert "language AZE;" in lines
-    assert "language TRK;" in lines
+    assert feature.code == dedent("""\
+        script latn;
+        language AZE;
+        lookup idotaccent {
+            sub i by idotaccent;
+        } idotaccent;
+        language TRK;
+        lookup idotaccent;""")
