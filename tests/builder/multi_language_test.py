@@ -18,7 +18,7 @@ from textwrap import dedent
 
 from fontTools.feaLib.parser import Parser
 
-from glyphsLib import classes, to_ufos
+from glyphsLib import classes, to_glyphs, to_ufos
 from glyphsLib.builder.multi_language import expand_multi_language_statements
 
 GLYPH_NAMES = ["i", "idotaccent", "Scedilla", "Scommaaccent", "Lcommaaccent"]
@@ -111,7 +111,7 @@ def test_unparseable_statement_is_untouched():
     assert expand_multi_language_statements(original) == original
 
 
-def test_to_ufos_expands_feature_code(ufo_module):
+def make_font():
     font = classes.GSFont()
     font.masters.append(classes.GSFontMaster())
     for name in ("i", "idotaccent"):
@@ -134,8 +134,11 @@ def test_to_ufos_expands_feature_code(ufo_module):
         } idotaccent;
     """)
     font.features.append(feature)
+    return font
 
-    (ufo,) = to_ufos(font, ufo_module=ufo_module)
+
+def test_to_ufos_expands_feature_code(ufo_module):
+    (ufo,) = to_ufos(make_font(), ufo_module=ufo_module)
 
     lines = [line.strip() for line in ufo.features.text.splitlines()]
     assert "language AZE TRK;" not in lines
@@ -143,3 +146,19 @@ def test_to_ufos_expands_feature_code(ufo_module):
     assert "language TRK;" in lines
     assert lines.count("lookup idotaccent;") == 1
     Parser(io.StringIO(ufo.features.text), glyphNames=GLYPH_NAMES).parse()
+
+
+def test_expansion_does_not_round_trip(ufo_module):
+    """The expansion is one-way: the shorthand is not restored.
+
+    Going back to Glyphs yields the expanded form rather than the original
+    statement. UFO -> Glyphs -> UFO is unaffected, because the original
+    feature text is recovered from ORIGINAL_FEATURE_CODE_KEY.
+    """
+    (ufo,) = to_ufos(make_font(), ufo_module=ufo_module)
+
+    (feature,) = to_glyphs([ufo]).features
+    lines = [line.strip() for line in feature.code.splitlines()]
+    assert "language AZE TRK;" not in lines
+    assert "language AZE;" in lines
+    assert "language TRK;" in lines
