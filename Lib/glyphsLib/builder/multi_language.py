@@ -32,14 +32,12 @@ https://github.com/googlefonts/glyphsLib/issues/1109.
 import logging
 import re
 
+from .variable_features import _blank_comments_and_strings
+
 logger = logging.getLogger(__name__)
 
 # Keywords the FEA spec allows after the tag of a `language` statement.
 _LANGUAGE_KEYWORDS = frozenset(("exclude_dflt", "include_dflt", "required"))
-
-# Comment | "string": blanked out before anything below is matched, so that a
-# brace, a semicolon or a keyword inside one is never taken for code.
-_skip_re = re.compile(r"#[^\n]*|\"[^\"\n]*\"")
 
 _language_re = re.compile(r"^([ \t]*)language[ \t]+([^;]+);[ \t]*$")
 # A `language` or `script` statement closes the block opened by the previous one.
@@ -52,6 +50,14 @@ _lookup_def_re = re.compile(
 )
 # Definitions that name something: emitted once, dropped when replayed.
 _definition_re = re.compile(r"^[ \t]*(?:@[A-Za-z0-9_.]+[ \t]*=|markClass[ \t(\[])")
+# An OpenType language system tag, which unlike a feature tag may be shorter
+# than four characters (`ROM`, `AZE`).
+_tag_re = re.compile(r"[A-Za-z0-9_]{1,4}")
+
+
+def _depth_delta(line):
+    """How much the line changes the brace nesting depth."""
+    return line.count("{") - line.count("}")
 
 
 def expand_multi_language_statements(fea):
@@ -76,7 +82,10 @@ def expand_multi_language_statements(fea):
     for feaLib to report.
     """
     lines = fea.splitlines()
-    code = [_skip_re.sub(lambda m: " " * len(m.group(0)), line) for line in lines]
+    # Scan a copy with comments and string literals blanked out, so that a
+    # brace, a semicolon or a keyword inside one is never taken for code. The
+    # blanking preserves column numbers, so the original lines stay usable.
+    code = _blank_comments_and_strings(fea).splitlines()
     out = []
     changed = False
     i = 0
@@ -112,7 +121,7 @@ def expand_multi_language_statements(fea):
 
 
 def _statement(indent, tag, keywords, trailing=""):
-    statement = "{}language {};".format(indent, " ".join([tag] + keywords))
+    statement = f'{indent}language {" ".join([tag] + keywords)};'
     return f"{statement} {trailing}" if trailing else statement
 
 
@@ -127,7 +136,7 @@ def _split_tokens(tokens):
     for token in tokens.split():
         if token in _LANGUAGE_KEYWORDS:
             keywords.append(token)
-        elif keywords or not re.fullmatch(r"[A-Za-z0-9_]{1,4}", token):
+        elif keywords or not _tag_re.fullmatch(token):
             # A tag after a keyword, or a token that is not a tag at all.
             return None, None
         else:
@@ -146,7 +155,7 @@ def _body_end(code, start):
     while i < len(code):
         if depth == 0 and _delimiter_re.match(code[i]):
             break
-        new_depth = depth + code[i].count("{") - code[i].count("}")
+        new_depth = depth + _depth_delta(code[i])
         if new_depth < 0:
             # The line closes the block we are nested in (`} locl;`).
             break
@@ -168,7 +177,7 @@ def _parse_body(body, code):
         if match:
             start, depth, opened = i, 0, False
             while i < len(body):
-                depth += code[i].count("{") - code[i].count("}")
+                depth += _depth_delta(code[i])
                 opened = opened or depth > 0
                 i += 1
                 if opened and depth <= 0:
