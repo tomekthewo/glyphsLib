@@ -37,12 +37,21 @@ logger = logging.getLogger(__name__)
 # Keywords the FEA spec allows after the tag of a `language` statement.
 _LANGUAGE_KEYWORDS = frozenset(("exclude_dflt", "include_dflt", "required"))
 
+# Comment | "string": blanked out before anything below is matched, so that a
+# brace, a semicolon or a keyword inside one is never taken for code.
+_skip_re = re.compile(r"#[^\n]*|\"[^\"\n]*\"")
+
 _language_re = re.compile(r"^([ \t]*)language[ \t]+([^;]+);[ \t]*$")
 # A `language` or `script` statement closes the block opened by the previous one.
 _delimiter_re = re.compile(r"^[ \t]*(?:language|script)[ \t]+[^;]+;[ \t]*$")
-_lookup_open_re = re.compile(r"^([ \t]*)lookup[ \t]+([A-Za-z_][A-Za-z0-9_.]*)[ \t]*\{")
-_class_def_re = re.compile(r"^[ \t]*@[A-Za-z0-9_.]+[ \t]*=")
-_tag_re = re.compile(r"^[A-Za-z0-9_]{1,4}$")
+# `lookup NAME [useExtension] {`, with the brace allowed on a following line.
+# A reference (`lookup NAME;`) matches neither branch and stays a plain rule.
+_lookup_def_re = re.compile(
+    r"^([ \t]*)lookup[ \t]+([A-Za-z_][A-Za-z0-9_.]*)[ \t]*"
+    r"(?:useExtension[ \t]*)?(?:\{|$)"
+)
+# Definitions that name something: emitted once, dropped when replayed.
+_definition_re = re.compile(r"^[ \t]*(?:@[A-Za-z0-9_.]+[ \t]*=|markClass[ \t(\[])")
 
 
 def expand_multi_language_statements(fea):
@@ -51,7 +60,8 @@ def expand_multi_language_statements(fea):
     The block is emitted once for the first tag and then repeated for every
     remaining one. Named lookups cannot simply be duplicated -- that would
     redefine them -- so the repeats reference the lookup defined under the
-    first tag, and glyph class definitions are likewise emitted only once::
+    first tag, and glyph class and ``markClass`` definitions are likewise
+    emitted only once::
 
         language AZE;
         lookup idotaccent {
@@ -66,21 +76,26 @@ def expand_multi_language_statements(fea):
     for feaLib to report.
     """
     lines = fea.splitlines()
+    code = [_skip_re.sub(lambda m: " " * len(m.group(0)), line) for line in lines]
     out = []
     changed = False
     i = 0
     while i < len(lines):
-        line = lines[i]
-        match = _language_re.match(line)
+        match = _language_re.match(code[i])
         tags, keywords = _split_tokens(match.group(2)) if match else (None, None)
         if not tags or len(tags) < 2:
-            out.append(line)
+            out.append(lines[i])
             i += 1
             continue
         indent = match.group(1)
-        body, i = _collect_body(lines, i + 1)
-        items = _parse_body(body)
-        out.append(_statement(indent, tags[0], keywords))
+        # Keep anything the original statement carried after the semicolon
+        # (a trailing comment); the blanking above preserves column numbers.
+        trailing = lines[i][code[i].index(";") + 1 :].strip()
+        start = i + 1
+        i = _body_end(code, start)
+        body, body_code = lines[start:i], code[start:i]
+        items = _parse_body(body, body_code)
+        out.append(_statement(indent, tags[0], keywords, trailing))
         out.extend(body)
         for tag in tags[1:]:
             out.append(_statement(indent, tag, keywords))
@@ -96,8 +111,9 @@ def expand_multi_language_statements(fea):
     return expanded
 
 
-def _statement(indent, tag, keywords):
-    return "{}language {};".format(indent, " ".join([tag] + keywords))
+def _statement(indent, tag, keywords, trailing=""):
+    statement = "{}language {};".format(indent, " ".join([tag] + keywords))
+    return f"{statement} {trailing}" if trailing else statement
 
 
 def _split_tokens(tokens):
@@ -111,7 +127,7 @@ def _split_tokens(tokens):
     for token in tokens.split():
         if token in _LANGUAGE_KEYWORDS:
             keywords.append(token)
-        elif keywords or not _tag_re.match(token):
+        elif keywords or not re.fullmatch(r"[A-Za-z0-9_]{1,4}", token):
             # A tag after a keyword, or a token that is not a tag at all.
             return None, None
         else:
@@ -119,53 +135,55 @@ def _split_tokens(tokens):
     return tags, keywords
 
 
-def _collect_body(lines, start):
-    """Collect the lines governed by a ``language`` statement.
+def _body_end(code, start):
+    """Return the index of the first line no longer governed by the statement.
 
-    That is everything up to the next ``language``/``script`` statement or the
-    end of the enclosing block, whichever comes first. Returns the lines and
-    the index of the first line not taken.
+    The body runs up to the next ``language``/``script`` statement or the end
+    of the enclosing block, whichever comes first.
     """
-    body = []
     depth = 0
     i = start
-    while i < len(lines):
-        line = lines[i]
-        if depth == 0 and _delimiter_re.match(line):
+    while i < len(code):
+        if depth == 0 and _delimiter_re.match(code[i]):
             break
-        new_depth = depth + line.count("{") - line.count("}")
+        new_depth = depth + code[i].count("{") - code[i].count("}")
         if new_depth < 0:
             # The line closes the block we are nested in (`} locl;`).
             break
-        body.append(line)
         depth = new_depth
         i += 1
-    return body, i
+    return i
 
 
-def _parse_body(body):
+def _parse_body(body, code):
     """Split the body into ``(kind, name, lines)`` items.
 
-    ``kind`` is ``lookup`` for a named lookup block, ``class`` for a glyph
-    class definition and ``line`` for anything else.
+    ``kind`` is ``lookup`` for a named lookup block, ``definition`` for a
+    glyph class or ``markClass`` definition and ``line`` for anything else.
     """
     items = []
     i = 0
     while i < len(body):
-        line = body[i]
-        match = _lookup_open_re.match(line)
+        match = _lookup_def_re.match(code[i])
         if match:
-            depth = line.count("{") - line.count("}")
-            block = [line]
-            i += 1
-            while i < len(body) and depth > 0:
-                block.append(body[i])
-                depth += body[i].count("{") - body[i].count("}")
+            start, depth, opened = i, 0, False
+            while i < len(body):
+                depth += code[i].count("{") - code[i].count("}")
+                opened = opened or depth > 0
                 i += 1
-            items.append(("lookup", match.groups(), block))
+                if opened and depth <= 0:
+                    break
+            items.append(("lookup", match.groups(), body[start:i]))
             continue
-        kind = "class" if _class_def_re.match(line) else "line"
-        items.append((kind, None, [line]))
+        if _definition_re.match(code[i]):
+            start = i
+            # A definition runs to its terminating semicolon.
+            while i < len(body) and ";" not in code[i]:
+                i += 1
+            i = min(i + 1, len(body))
+            items.append(("definition", None, body[start:i]))
+            continue
+        items.append(("line", None, [body[i]]))
         i += 1
     return items
 
@@ -173,14 +191,14 @@ def _parse_body(body):
 def _replay(items):
     """Render the body again for a repeated tag.
 
-    Lookups become references, class definitions are dropped, the rest is
-    repeated as is.
+    Lookups become references, definitions are dropped, the rest is repeated
+    as is.
     """
     out = []
     for kind, name, block in items:
         if kind == "lookup":
             indent, lookup_name = name
             out.append(f"{indent}lookup {lookup_name};")
-        elif kind != "class":
+        elif kind != "definition":
             out.extend(block)
     return out
